@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 export default function TarjetaUsuario() {
     const [userData, setUserData] = useState(null);
     const [subscription, setSubscription] = useState(null);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState(null);
+    const navigate = useNavigate();
 
     useEffect(() => {
         loadUserData();
@@ -12,33 +14,60 @@ export default function TarjetaUsuario() {
 
     const loadUserData = async () => {
         const userString = localStorage.getItem('user');
-        if (!userString) {
+        const token = localStorage.getItem('access_token');
+
+        if (!userString || !token) {
             setError('No se encontró información del usuario');
             setIsLoading(false);
+            navigate('/login');
             return;
         }
 
         try {
             const user = JSON.parse(userString);
             setUserData(user);
-            await fetchUserSubscription(user.id);
+            await fetchUserSubscription(user.id, token);
         } catch (error) {
             setError('Error al cargar los datos');
+            if (error.message === 'Token inválido') {
+                navigate('/login');
+            }
         } finally {
             setIsLoading(false);
         }
     };
 
-    const fetchUserSubscription = async (userId) => {
+    const fetchUserSubscription = async (userId, token) => {
         try {
-            const response = await fetch(`${import.meta.env.VITE_URL_SERVER}/subscriptions/user/${userId}`);
-            if (!response.ok) throw new Error('Error al obtener la suscripción');
+            const response = await fetch(
+                `${import.meta.env.VITE_URL_SERVER}/subscriptions/user/${userId}`,
+                {
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    }
+                }
+            );
+
+            if (response.status === 401) {
+                throw new Error('Token inválido');
+            }
+
+            if (!response.ok) {
+                throw new Error('Error al obtener la suscripción');
+            }
             
             const data = await response.json();
             setSubscription(data);
         } catch (error) {
             console.error('Error:', error);
             setError('Error al obtener la suscripción');
+            if (error.message === 'Token inválido') {
+                // Limpiar localStorage y redirigir al login
+                localStorage.removeItem('access_token');
+                localStorage.removeItem('user');
+                throw error;
+            }
         }
     };
 
