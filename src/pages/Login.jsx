@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
-
 export default function Login() {
   const [credentials, setCredentials] = useState({
     username: '',
@@ -13,7 +12,7 @@ export default function Login() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
-    console.log('LOGIN');
+    
     try {
         const response = await fetch(`${import.meta.env.VITE_URL_SERVER}/login`, {
             method: 'POST',
@@ -30,18 +29,17 @@ export default function Login() {
             return;
         }
 
-        // Si el login es exitoso
-        if (data.message === 'Login successful') {
-            // Guardamos los datos del usuario en localStorage si los necesitas después
-            localStorage.setItem('user', JSON.stringify(data.user));
+        // Guardamos el token y los datos del usuario
+        localStorage.setItem('access_token', data.access_token);
+        localStorage.setItem('user', JSON.stringify(data.user));
             
-            // Redirigimos según el rol
-            if (data.user.rolId === 1) {
-                navigate('/dashboard');
-            } else if (data.user.rolId === 2) {
-                navigate('/app');
-            }
+        // Redirigimos según el rol
+        if (data.user.rolId === 1) {
+            navigate('/dashboard');
+        } else if (data.user.rolId === 2) {
+            navigate('/app');
         }
+        
     } catch (error) {
         console.error('Error:', error);
         setError('Error de conexión. Intente nuevamente.');

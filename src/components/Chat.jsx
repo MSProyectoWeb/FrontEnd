@@ -1,126 +1,131 @@
 import { useState, useEffect, useRef } from 'react';
 import io from 'socket.io-client';
+import { useNavigate } from 'react-router-dom';
 
 export default function Chat() {
     const [message, setMessage] = useState('');
     const [messages, setMessages] = useState([]);
     const [user, setUser] = useState(null);
     const [activeUsers, setActiveUsers] = useState([]);
-    const socketRef = useRef();
-    const chatRef = useRef();
+    const [connected, setConnected] = useState(false);
+    const socketRef = useRef(null);
+    const chatRef = useRef(null);
+    const navigate = useNavigate();
 
     useEffect(() => {
+        const token = localStorage.getItem('access_token');
         const userString = localStorage.getItem('user');
-        if (userString) {
-            const userData = JSON.parse(userString);
-            setUser(userData);
-            initializeSocket(userData);
+
+        if (!token || !userString) {
+            navigate('/login');
+            return;
         }
 
+        // Inicializar socket con reconexión
+        socketRef.current = io(`${import.meta.env.VITE_URL_SERVER}`, {
+            reconnection: true,
+            reconnectionAttempts: 5,
+            reconnectionDelay: 1000,
+            auth: {
+                token: `Bearer ${token}`
+            }
+        });
+
+        // Configurar eventos del socket
+        setupSocketEvents();
+
+        // Cleanup al desmontar
         return () => {
             if (socketRef.current) {
                 socketRef.current.disconnect();
             }
         };
-    }, []);
+    }, [navigate]);
 
-    const initializeSocket = (userData) => {
-        socketRef.current = io(`${import.meta.env.VITE_URL_SERVER}`, {
-            transports: ['websocket']
+    const setupSocketEvents = () => {
+        const socket = socketRef.current;
+        const userData = JSON.parse(localStorage.getItem('user'));
+        setUser(userData);
+
+        socket.on('connect', () => {
+            console.log('Conectado al servidor');
+            setConnected(true);
+            
+            // Unirse al chat con el nombre de usuario
+            socket.emit('join', `${userData.nombre} ${userData.apellido}`);
+            socket.emit('getActiveUsers');
         });
 
-        // Unirse al chat con ID único
-        socketRef.current.emit('join', {
-            userId: userData.id,
-            username: `${userData.nombre} ${userData.apellido}`
+        socket.on('disconnect', () => {
+            console.log('Desconectado del servidor');
+            setConnected(false);
+            addSystemMessage('Desconectado del servidor. Intentando reconectar...');
         });
 
-        // Escuchar nuevos mensajes con verificación de duplicados
-        socketRef.current.on('newMessage', (message) => {
-            setMessages(prev => {
-                // Verificar si el mensaje ya existe
-                const isDuplicate = prev.some(msg => 
-                    msg.timestamp === message.timestamp && 
-                    msg.userId === message.userId && 
-                    msg.content === message.content
-                );
-                if (isDuplicate) return prev;
-                
-                return [...prev, {
-                    userId: message.userId,
-                    name: message.user,
-                    message: message.content,
-                    timestamp: message.timestamp,
-                    time: new Date(message.timestamp).toLocaleTimeString(),
-                }];
-            });
+        socket.on('newMessage', (message) => {
+            addMessage(message);
         });
 
-        // Escuchar eventos de usuario con verificación
-        socketRef.current.on('userJoined', ({ userId, username }) => {
-            setMessages(prev => {
-                const isDuplicate = prev.some(msg => 
-                    msg.type === 'system' && 
-                    msg.userId === userId && 
-                    msg.message.includes(username)
-                );
-                if (isDuplicate) return prev;
-
-                return [...prev, {
-                    type: 'system',
-                    userId,
-                    message: `${username} se ha unido al chat`,
-                    timestamp: Date.now(),
-                    time: new Date().toLocaleTimeString(),
-                }];
-            });
+        socket.on('userJoined', (username) => {
+            addSystemMessage(`${username} se ha unido al chat`);
+            socket.emit('getActiveUsers');
         });
 
-        socketRef.current.on('userLeft', ({ userId, username }) => {
-            setMessages(prev => {
-                const isDuplicate = prev.some(msg => 
-                    msg.type === 'system' && 
-                    msg.userId === userId && 
-                    msg.message.includes(username)
-                );
-                if (isDuplicate) return prev;
-
-                return [...prev, {
-                    type: 'system',
-                    userId,
-                    message: `${username} ha dejado el chat`,
-                    timestamp: Date.now(),
-                    time: new Date().toLocaleTimeString(),
-                }];
-            });
+        socket.on('userLeft', (username) => {
+            if (username) {
+                addSystemMessage(`${username} ha dejado el chat`);
+                socket.emit('getActiveUsers');
+            }
         });
 
-        // Actualizar lista de usuarios activos
-        socketRef.current.on('getActiveUsers', (users) => {
-            setActiveUsers(users.filter((userItem, index, self) => 
-                self.findIndex(u => u.userId === userItem.userId) === index
-            ));
+        socket.on('getActiveUsers', (users) => {
+            setActiveUsers(users);
+        });
+
+        // Manejo de errores
+        socket.on('connect_error', (error) => {
+            console.error('Error de conexión:', error);
+            if (error.message === 'Authentication error') {
+                localStorage.removeItem('access_token');
+                localStorage.removeItem('user');
+                navigate('/login');
+                return;
+            }
+            addSystemMessage('Error de conexión con el servidor');
+        });
+
+        socket.on('error', (error) => {
+            console.error('Error:', error);
+            addSystemMessage('Ha ocurrido un error');
         });
     };
 
-    // Auto-scroll al último mensaje
-    useEffect(() => {
-        if (chatRef.current) {
-            chatRef.current.scrollTop = chatRef.current.scrollHeight;
-        }
-    }, [messages]);
+    const addMessage = (message) => {
+        const time = new Date(message.timestamp).toLocaleTimeString();
+        setMessages(prev => [...prev, {
+            type: 'message',
+            user: message.user,
+            content: message.content,
+            time: time,
+            isOwn: user && `${user.nombre} ${user.apellido}` === message.user
+        }]);
+    };
+
+    const addSystemMessage = (content) => {
+        setMessages(prev => [...prev, {
+            type: 'system',
+            content,
+            time: new Date().toLocaleTimeString()
+        }]);
+    };
 
     const handleSendMessage = () => {
-        if (!message.trim() || !user) return;
+        if (!message.trim() || !connected) return;
 
-        const messageData = {
-            userId: user.id,
-            user: `${user.nombre} ${user.apellido}`,
-            content: message.trim(),
-            timestamp: Date.now(),
-        };
+        socketRef.current.emit('message', {
+            content: message.trim()
+        });
 
-        socketRef.current.emit('message', messageData);
         setMessage('');
     };
 
@@ -131,55 +136,59 @@ export default function Chat() {
         }
     };
 
+    // Auto-scroll al último mensaje
+    useEffect(() => {
+        if (chatRef.current) {
+            chatRef.current.scrollTop = chatRef.current.scrollHeight;
+        }
+    }, [messages]);
+
     return (
         <div className="flex h-[600px] gap-4">
+            {/* Lista de usuarios activos */}
             <div className="w-48 bg-white rounded-lg p-4">
                 <h3 className="font-bold mb-3">Usuarios Activos</h3>
                 <ul className="space-y-2">
-                    {activeUsers.map((user) => (
-                        <li key={user.userId} className="text-sm">
-                            {user.username}
+                    {activeUsers.map((username, index) => (
+                        <li key={index} className="text-sm">
+                            {username}
                         </li>
                     ))}
                 </ul>
             </div>
 
+            {/* Área del chat */}
             <div className="flex-1 p-4 rounded-lg bg-white flex flex-col">
                 <div ref={chatRef} className="flex-1 overflow-y-auto p-4 space-y-4">
-                    {messages.map((msg, index) => {
-                        if (msg.type === 'system') {
-                            return (
-                                <div key={`${msg.userId}-${msg.timestamp}`} 
-                                     className="text-center text-gray-500 text-sm italic">
-                                    {msg.message}
+                    {messages.map((msg, index) => (
+                        <div key={index} className={`${msg.type === 'system' ? 'text-center text-gray-500 italic' : ''}`}>
+                            {msg.type === 'system' ? (
+                                <>
+                                    <span className="text-sm">{msg.content}</span>
                                     <span className="text-xs ml-2">{msg.time}</span>
+                                </>
+                            ) : (
+                                <div className={`space-y-1 ${msg.isOwn ? 'ml-auto' : ''}`}>
+                                    <p className={`font-medium ${msg.isOwn ? 'text-right' : ''}`}>
+                                        {msg.user}
+                                    </p>
+                                    <div className={`p-3 rounded-2xl max-w-[80%] ${
+                                        msg.isOwn 
+                                            ? 'bg-blue-500 text-white ml-auto' 
+                                            : 'bg-gray-100'
+                                    }`}>
+                                        {msg.content}
+                                    </div>
+                                    <p className={`text-sm text-gray-500 ${msg.isOwn ? 'text-right' : ''}`}>
+                                        {msg.time}
+                                    </p>
                                 </div>
-                            );
-                        }
-
-                        const isOwnMessage = user && msg.userId === user.id;
-
-                        return (
-                            <div key={`${msg.userId}-${msg.timestamp}`} 
-                                 className={`space-y-1 ${isOwnMessage ? 'ml-auto' : ''}`}>
-                                <p className={`font-medium ${isOwnMessage ? 'text-right' : ''}`}>
-                                    {msg.name}
-                                </p>
-                                <div className={`p-3 rounded-2xl max-w-[80%] ${
-                                    isOwnMessage 
-                                        ? 'bg-blue-500 text-white ml-auto' 
-                                        : 'bg-gray-100'
-                                }`}>
-                                    {msg.message}
-                                </div>
-                                <p className={`text-sm text-gray-500 ${isOwnMessage ? 'text-right' : ''}`}>
-                                    {msg.time}
-                                </p>
-                            </div>
-                        );
-                    })}
+                            )}
+                        </div>
+                    ))}
                 </div>
 
+                {/* Input para mensajes */}
                 <div className="flex gap-2 p-4 border-t">
                     <input
                         type="text"
@@ -188,10 +197,16 @@ export default function Chat() {
                         onKeyPress={handleKeyPress}
                         placeholder="Escribe un mensaje..."
                         className="flex-1 p-3 border rounded-lg"
+                        disabled={!connected}
                     />
                     <button
                         onClick={handleSendMessage}
-                        className="bg-blue-500 text-white px-6 py-2 rounded-lg hover:bg-blue-600 transition-colors"
+                        disabled={!connected}
+                        className={`px-6 py-2 rounded-lg transition-colors ${
+                            connected 
+                                ? 'bg-blue-500 text-white hover:bg-blue-600' 
+                                : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                        }`}
                     >
                         Enviar
                     </button>

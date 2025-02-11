@@ -12,20 +12,45 @@ export default function MembershipTable() {
   const [selectedMemberId, setSelectedMemberId] = useState(null);
   const [selectedSuscription, setSelectedSuscription] = useState(null);
   const [editingMember, setEditingMember] = useState(null);
+  const [error, setError] = useState(null);
   const navigate = useNavigate();
 
   useEffect(() => {
     fetchMembers();
   }, []);
 
+  const handleAuthError = () => {
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('user');
+    navigate('/login');
+  };
+
   const fetchMembers = async () => {
+    const token = localStorage.getItem('access_token');
+    if (!token) {
+      handleAuthError();
+      return;
+    }
+
     try {
-      const response = await fetch(`${import.meta.env.VITE_URL_SERVER}/users`);
+      const response = await fetch(`${import.meta.env.VITE_URL_SERVER}/users`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.status === 401) {
+        handleAuthError();
+        return;
+      }
+
       if (!response.ok) throw new Error('Network response was not ok');
       const data = await response.json();
       setMembers(data);
     } catch (error) {
       console.error('Error fetching members:', error);
+      setError('Error al cargar los miembros');
     }
   };
 
@@ -35,10 +60,17 @@ export default function MembershipTable() {
   };
 
   const handleSaveEdit = async () => {
+    const token = localStorage.getItem('access_token');
+    if (!token) {
+      handleAuthError();
+      return;
+    }
+
     try {
       const response = await fetch(`${import.meta.env.VITE_URL_SERVER}/users/${editingMember.id}`, {
         method: 'PATCH',
         headers: {
+          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -49,6 +81,11 @@ export default function MembershipTable() {
         })
       });
 
+      if (response.status === 401) {
+        handleAuthError();
+        return;
+      }
+
       if (!response.ok) throw new Error('Error al actualizar');
 
       await fetchMembers();
@@ -56,6 +93,7 @@ export default function MembershipTable() {
       setEditingMember(null);
     } catch (error) {
       console.error('Error updating member:', error);
+      setError('Error al actualizar el miembro');
     }
   };
 
@@ -69,13 +107,28 @@ export default function MembershipTable() {
   const confirmRenewal = async () => {
     if (!selectedMemberId) return;
 
+    const token = localStorage.getItem('access_token');
+    if (!token) {
+      handleAuthError();
+      return;
+    }
+
     try {
-      const response = await fetch(`${import.meta.env.VITE_URL_SERVER}/subscriptions/${selectedSuscription}/renovar?tipoSuscripcion=${selectedType}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
+      const response = await fetch(
+        `${import.meta.env.VITE_URL_SERVER}/subscriptions/${selectedSuscription}/renovar?tipoSuscripcion=${selectedType}`, 
+        {
+          method: 'PATCH',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      if (response.status === 401) {
+        handleAuthError();
+        return;
+      }
 
       if (!response.ok) throw new Error('Error al renovar');
 
@@ -84,6 +137,7 @@ export default function MembershipTable() {
       setSelectedMemberId(null);
     } catch (error) {
       console.error('Error renovando:', error);
+      setError('Error al renovar la suscripción');
     }
   };
 
@@ -97,10 +151,24 @@ export default function MembershipTable() {
   const confirmDelete = async () => {
     if (!selectedMemberId) return;
 
+    const token = localStorage.getItem('access_token');
+    if (!token) {
+      handleAuthError();
+      return;
+    }
+
     try {
       const response = await fetch(`${import.meta.env.VITE_URL_SERVER}/subscriptions/${selectedSuscription}`, {
         method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        }
       });
+
+      if (response.status === 401) {
+        handleAuthError();
+        return;
+      }
 
       if (!response.ok) throw new Error('Error al eliminar miembro');
 
@@ -109,6 +177,7 @@ export default function MembershipTable() {
       setSelectedMemberId(null);
     } catch (error) {
       console.error('Error eliminando:', error);
+      setError('Error al eliminar la suscripción');
     }
   };
 
@@ -124,9 +193,21 @@ export default function MembershipTable() {
 
   return (
     <div className="w-full min-h-[600px] p-8 mx-2 space-y-6 border-2 border-black rounded-2xl">
+      {error && (
+        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative">
+          {error}
+          <button 
+            className="absolute top-0 right-0 px-4 py-3"
+            onClick={() => setError(null)}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       {/* Modal de edición */}
       {isEditing && editingMember && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white p-6 rounded-lg shadow-lg w-96">
             <h3 className="text-lg font-semibold mb-4">Editar Miembro</h3>
             <div className="space-y-4">
@@ -214,7 +295,7 @@ export default function MembershipTable() {
 
       {/* Modal de renovación */}
       {isRenewing && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white p-6 rounded-lg shadow-lg">
             <h3 className="text-lg font-semibold mb-4">Renovar Membresía</h3>
             <select
@@ -247,10 +328,10 @@ export default function MembershipTable() {
 
       {/* Modal de confirmación de eliminación */}
       {isDeleting && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white p-6 rounded-lg shadow-lg">
             <h3 className="text-lg font-semibold mb-4">Confirmar Eliminación</h3>
-            <p>¿Estás seguro de que deseas eliminar este miembro?</p>
+            <p>¿Estás seguro de que deseas eliminar esta suscripción?</p>
             <div className="flex justify-end gap-2 mt-4">
               <button
                 onClick={() => setIsDeleting(false)}
